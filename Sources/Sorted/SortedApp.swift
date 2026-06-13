@@ -34,6 +34,7 @@ final class SortedApp: NSObject, NSApplicationDelegate {
         menu.addItem(actionItem("Group Minimized Windows in Dock", action: #selector(groupDockWindows)))
         menu.addItem(actionItem("Open Accessibility Settings...", action: #selector(openAccessibilitySettings)))
         menu.addItem(.separator())
+        menu.addItem(actionItem("About Sorted", action: #selector(showAbout)))
         menu.addItem(actionItem("Quit Sorted", key: "q", action: #selector(quit)))
         return menu
     }
@@ -77,6 +78,11 @@ final class SortedApp: NSObject, NSApplicationDelegate {
             string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
         ) else { return }
         NSWorkspace.shared.open(url)
+    }
+
+    @objc private func showAbout() {
+        NSApp.orderFrontStandardAboutPanel(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     @objc private func quit() {

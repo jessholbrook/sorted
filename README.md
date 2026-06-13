@@ -56,6 +56,21 @@ For live Dock sorting, also turn off:
 
 **System Settings → Desktop & Dock → Minimize windows into application icon**
 
+## Build a Real App Bundle
+
+Create a normal menu-bar-only `Sorted.app` bundle:
+
+```sh
+sh scripts/build-app.sh
+```
+
+The result is written to `dist/Sorted.app`. Consistently signed releases use
+the stable bundle identifier `com.jessholbrook.Sorted`, allowing macOS to retain
+Accessibility permission between updates.
+
+For Developer ID signing, notarization, and release packaging, see
+[DISTRIBUTION.md](DISTRIBUTION.md).
+
 ## Use
 
 1. Minimize several windows from multiple apps so their thumbnails appear in
@@ -108,13 +123,15 @@ Sources/
 - Some apps opt out of Accessibility window movement.
 - Some fixed-size windows may reject requested sizes.
 - Visible-window arrangements currently target the main display.
-- Sorted currently runs from source rather than as a signed downloadable app.
+- The Dock sorter still needs validation under App Sandbox and App Review;
+  Developer ID-signed and notarized direct distribution is the reliable
+  fallback.
 
 ## Privacy
 
 Sorted inspects window titles and positions through macOS Accessibility solely
 to perform the requested local arrangement. It does not store or transmit that
-information.
+information. See the full [Privacy Policy](PRIVACY.md).
 
 ## Contributing
 
