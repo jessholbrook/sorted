@@ -27,11 +27,6 @@ targets:
       - Xcode/Assets.xcassets
     dependencies:
       - target: SortedCore
-    postBuildScripts:
-      - name: Strip Extended Attributes
-        basedOnDependencyAnalysis: false
-        script: |
-          xattr -cr "$TARGET_BUILD_DIR/$WRAPPER_NAME"
     entitlements:
       path: Xcode/Sorted.entitlements
     info:

@@ -102,12 +102,13 @@ personal information.
 - [x] App icon asset catalog
 - [x] Privacy policy
 - [x] Draft App Store metadata and review notes
-- [ ] Accept the latest Apple Developer Program License Agreement
-- [ ] Create/download Mac Development and distribution certificates
-- [ ] Verify the Dock sorter works in the signed sandboxed build
+- [x] Accept the latest Apple Developer Program License Agreement
+- [x] Create/download Mac Development and App Store distribution signing assets
+- [x] Verify the Dock sorter works in the signed sandboxed build
+- [x] Create signed Release archive
+- [x] Export App Store package
 - [ ] Create the App Store Connect app record
 - [ ] Capture App Store screenshots
-- [ ] Archive and validate
 - [ ] Upload build to App Store Connect
 - [ ] Complete pricing, availability, and age rating
 - [ ] Submit for App Review

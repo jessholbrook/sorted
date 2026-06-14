@@ -110,7 +110,6 @@
 				22F21CF285DACC172D10708D /* Sources */,
 				9047DCF3B20A701A66C29B05 /* Resources */,
 				4910E2596DCCAFEAF7995D09 /* Frameworks */,
-				FB887680A2F106771E30EE7B /* Strip Extended Attributes */,
 			);
 			buildRules = (
 			);
@@ -186,28 +185,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
-
-/* Begin PBXShellScriptBuildPhase section */
-		FB887680A2F106771E30EE7B /* Strip Extended Attributes */ = {
-			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-			);
-			name = "Strip Extended Attributes";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "xattr -cr \"$TARGET_BUILD_DIR/$WRAPPER_NAME\"\n";
-		};
-/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		22F21CF285DACC172D10708D /* Sources */ = {

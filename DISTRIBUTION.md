@@ -125,5 +125,11 @@ After signing is configured, create an App Store archive:
 sh scripts/archive-app-store.sh
 ```
 
+Then export the archive for App Store Connect:
+
+```sh
+sh scripts/export-app-store.sh
+```
+
 See [APP_STORE_SUBMISSION.md](APP_STORE_SUBMISSION.md) for metadata, review
 notes, privacy answers, and the remaining submission checklist.
