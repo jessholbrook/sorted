@@ -2,3 +2,7 @@
 .local-home/
 .swiftpm/
 dist/
+DerivedData/
+*.xcarchive
+xcuserdata/
+*.xcuserstate

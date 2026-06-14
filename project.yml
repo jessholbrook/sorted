@@ -1,0 +1,71 @@
+name: Sorted
+options:
+  bundleIdPrefix: com.jessholbrook
+  deploymentTarget:
+    macOS: "13.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MACOSX_DEPLOYMENT_TARGET: "13.0"
+targets:
+  SortedCore:
+    type: library.static
+    platform: macOS
+    sources:
+      - Sources/SortedCore
+    settings:
+      base:
+        PRODUCT_MODULE_NAME: SortedCore
+        SKIP_INSTALL: true
+        SWIFT_INSTALL_OBJC_HEADER: false
+  Sorted:
+    type: application
+    platform: macOS
+    sources:
+      - Sources/Sorted
+      - Xcode/Assets.xcassets
+    dependencies:
+      - target: SortedCore
+    postBuildScripts:
+      - name: Strip Extended Attributes
+        basedOnDependencyAnalysis: false
+        script: |
+          xattr -cr "$TARGET_BUILD_DIR/$WRAPPER_NAME"
+    entitlements:
+      path: Xcode/Sorted.entitlements
+    info:
+      path: Xcode/Info.plist
+      properties:
+        CFBundleDisplayName: Sorted
+        CFBundleIconName: AppIcon
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        LSApplicationCategoryType: public.app-category.utilities
+        LSMinimumSystemVersion: "$(MACOSX_DEPLOYMENT_TARGET)"
+        LSUIElement: true
+        NSHumanReadableCopyright: Copyright © 2026 Jess Holbrook. All rights reserved.
+        NSPrincipalClass: NSApplication
+    settings:
+      base:
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_STYLE: Automatic
+        CURRENT_PROJECT_VERSION: "1"
+        DEVELOPMENT_TEAM: A8T4A3Z85B
+        ENABLE_APP_SANDBOX: true
+        ENABLE_HARDENED_RUNTIME: true
+        ENABLE_USER_SCRIPT_SANDBOXING: false
+        GENERATE_INFOPLIST_FILE: false
+        MARKETING_VERSION: "0.1.0"
+        PRODUCT_BUNDLE_IDENTIFIER: com.jessholbrook.Sorted
+        PRODUCT_NAME: Sorted
+        SWIFT_STRICT_CONCURRENCY: complete
+schemes:
+  Sorted:
+    build:
+      targets:
+        Sorted: all
+    run:
+      config: Debug
+    archive:
+      config: Release

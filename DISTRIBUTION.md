@@ -110,3 +110,20 @@ App Sandbox. If it does, submit a clear review note explaining that Sorted only
 performs drag events in direct response to the user's menu command. Keep the
 Developer ID release path available in case the Dock-specific behavior does not
 pass review.
+
+Generate the Xcode project:
+
+```sh
+brew install xcodegen
+sh scripts/generate-xcode-project.sh
+open Sorted.xcodeproj
+```
+
+After signing is configured, create an App Store archive:
+
+```sh
+sh scripts/archive-app-store.sh
+```
+
+See [APP_STORE_SUBMISSION.md](APP_STORE_SUBMISSION.md) for metadata, review
+notes, privacy answers, and the remaining submission checklist.

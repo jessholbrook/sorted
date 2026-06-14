@@ -71,6 +71,9 @@ Accessibility permission between updates.
 For Developer ID signing, notarization, and release packaging, see
 [DISTRIBUTION.md](DISTRIBUTION.md).
 
+For the sandboxed Xcode target and App Store submission materials, see
+[APP_STORE_SUBMISSION.md](APP_STORE_SUBMISSION.md).
+
 ## Use
 
 1. Minimize several windows from multiple apps so their thumbnails appear in
