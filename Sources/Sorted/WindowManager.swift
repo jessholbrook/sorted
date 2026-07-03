@@ -2,53 +2,38 @@ import AppKit
 import ApplicationServices
 import SortedCore
 
-enum SortedError: LocalizedError {
-    case accessibilityPermissionRequired
-    case noWindowsFound
-    case noFrontmostApp
-    case dockSettingFailed
-
-    var errorDescription: String? {
-        switch self {
-        case .accessibilityPermissionRequired:
-            return "Accessibility permission is required. Enable Sorted in System Settings → Privacy & Security → Accessibility."
-        case .noWindowsFound:
-            return "No movable windows were found."
-        case .noFrontmostApp:
-            return "The frontmost app has no movable windows."
-        case .dockSettingFailed:
-            return "The Dock setting could not be changed."
-        }
-    }
-}
-
 @MainActor
 final class WindowManager {
     struct Window {
         let element: AXUIElement
         let ownerName: String
         let ownerPID: pid_t
-        let title: String
     }
 
     func groupByApp() throws {
         let windows = try movableWindows()
-        let groups = Dictionary(grouping: windows, by: \.ownerName)
-            .sorted { $0.key.localizedCaseInsensitiveCompare($1.key) == .orderedAscending }
+        // Group by PID so two apps sharing a display name stay separate.
+        let groups = Dictionary(grouping: windows, by: \.ownerPID)
+            .values
+            .sorted { lhs, rhs in
+                let comparison = lhs[0].ownerName.localizedCaseInsensitiveCompare(rhs[0].ownerName)
+                guard comparison == .orderedSame else { return comparison == .orderedAscending }
+                return lhs[0].ownerPID < rhs[0].ownerPID
+            }
         let layouts = LayoutEngine.grouped(
-            groupSizes: groups.map(\.value.count),
+            groupSizes: groups.map(\.count),
             in: targetFrame()
         )
 
         for (group, frames) in zip(groups, layouts) {
-            for (window, frame) in zip(group.value, frames) {
+            for (window, frame) in zip(group, frames) {
                 set(window: window, frame: frame)
             }
         }
     }
 
     func tileFrontmostApp() throws {
-        try requirePermission()
+        try requireAccessibilityPermission()
         guard let app = NSWorkspace.shared.frontmostApplication else {
             throw SortedError.noFrontmostApp
         }
@@ -70,15 +55,8 @@ final class WindowManager {
         }
     }
 
-    private func requirePermission() throws {
-        let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
-        guard AXIsProcessTrustedWithOptions(options) else {
-            throw SortedError.accessibilityPermissionRequired
-        }
-    }
-
     private func movableWindows() throws -> [Window] {
-        try requirePermission()
+        try requireAccessibilityPermission()
 
         let windows = NSWorkspace.shared.runningApplications
             .filter { $0.activationPolicy == .regular && $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
@@ -90,16 +68,15 @@ final class WindowManager {
 
     private func windows(for application: NSRunningApplication) -> [Window] {
         let appElement = AXUIElementCreateApplication(application.processIdentifier)
-        guard let elements: [AXUIElement] = value(of: kAXWindowsAttribute, from: appElement) else {
+        guard let elements: [AXUIElement] = appElement.attribute(kAXWindowsAttribute) else {
             return []
         }
 
         return elements.compactMap { element in
-            let minimized: Bool = value(of: kAXMinimizedAttribute, from: element) ?? false
-            let role: String = value(of: kAXRoleAttribute, from: element) ?? ""
-            let subrole: String = value(of: kAXSubroleAttribute, from: element) ?? ""
-            let title: String = value(of: kAXTitleAttribute, from: element) ?? "Untitled"
-            let size: CGSize? = axValue(of: kAXSizeAttribute, from: element, as: .cgSize)
+            let minimized: Bool = element.attribute(kAXMinimizedAttribute) ?? false
+            let role: String = element.attribute(kAXRoleAttribute) ?? ""
+            let subrole: String = element.attribute(kAXSubroleAttribute) ?? ""
+            let size: CGSize? = element.attribute(kAXSizeAttribute, as: .cgSize)
 
             guard !minimized,
                   role == kAXWindowRole,
@@ -113,8 +90,7 @@ final class WindowManager {
             return Window(
                 element: element,
                 ownerName: application.localizedName ?? "Unknown App",
-                ownerPID: application.processIdentifier,
-                title: title
+                ownerPID: application.processIdentifier
             )
         }
     }
@@ -138,34 +114,16 @@ final class WindowManager {
         var position = frame.origin
         var size = frame.size
 
+        // Position → size → position: apps that constrain the requested size
+        // can shift the window while resizing, so re-anchor afterward.
         if let positionValue = AXValueCreate(.cgPoint, &position) {
             AXUIElementSetAttributeValue(window.element, kAXPositionAttribute as CFString, positionValue)
         }
         if let sizeValue = AXValueCreate(.cgSize, &size) {
             AXUIElementSetAttributeValue(window.element, kAXSizeAttribute as CFString, sizeValue)
         }
-    }
-
-    private func value<T>(of attribute: String, from element: AXUIElement) -> T? {
-        var rawValue: CFTypeRef?
-        let result = AXUIElementCopyAttributeValue(element, attribute as CFString, &rawValue)
-        guard result == .success else { return nil }
-        return rawValue as? T
-    }
-
-    private func axValue<T>(
-        of attribute: String,
-        from element: AXUIElement,
-        as type: AXValueType
-    ) -> T? {
-        guard let rawValue: AXValue = value(of: attribute, from: element),
-              AXValueGetType(rawValue) == type else {
-            return nil
+        if let positionValue = AXValueCreate(.cgPoint, &position) {
+            AXUIElementSetAttributeValue(window.element, kAXPositionAttribute as CFString, positionValue)
         }
-
-        let pointer = UnsafeMutablePointer<T>.allocate(capacity: 1)
-        defer { pointer.deallocate() }
-        guard AXValueGetValue(rawValue, type, pointer) else { return nil }
-        return pointer.pointee
     }
 }

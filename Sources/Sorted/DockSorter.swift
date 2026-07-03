@@ -1,34 +1,25 @@
 import AppKit
 import ApplicationServices
 
-enum DockSortError: LocalizedError {
-    case accessibilityPermissionRequired
-    case minimizeIntoApplicationEnabled
-    case dockNotFound
-    case noMinimizedWindows
-    case dockMustBeVisible
-    case partiallySorted(remaining: Int)
-
-    var errorDescription: String? {
-        switch self {
-        case .accessibilityPermissionRequired:
-            return "Accessibility permission is required. Enable Sorted in System Settings → Privacy & Security → Accessibility."
-        case .minimizeIntoApplicationEnabled:
-            return "“Minimize windows into application icon” is currently enabled. Turn it off in System Settings → Desktop & Dock, then minimize windows as individual Dock thumbnails before sorting."
-        case .dockNotFound:
-            return "Sorted could not find the Dock."
-        case .noMinimizedWindows:
-            return "No individual minimized-window thumbnails were found in the Dock."
-        case .dockMustBeVisible:
-            return "The Dock must be visible while Sorted sorts its minimized windows."
-        case .partiallySorted(let remaining):
-            return "Sorted grouped most thumbnails, but the Dock rejected \(remaining) remaining move\(remaining == 1 ? "" : "s"). Try the action again to finish."
-        }
+/// Reorders minimized-window thumbnails in the Dock by synthesizing drag
+/// input. Sorting runs off the main actor with async waits so the app stays
+/// responsive, and it can be cancelled between moves.
+final class DockSorter: Sendable {
+    struct RunningApp: Sendable {
+        let pid: pid_t
+        let name: String
     }
-}
 
-@MainActor
-final class DockSorter {
+    /// Main-actor state captured before the sort starts, so the sort itself
+    /// never has to touch main-actor-bound AppKit API (NSScreen, NSWorkspace).
+    struct Context: Sendable {
+        let dockPID: pid_t
+        /// Screen frames already converted to the Accessibility coordinate
+        /// space (top-left origin).
+        let screenFrames: [CGRect]
+        let applications: [RunningApp]
+    }
+
     private struct DockItem {
         let title: String
         let frame: CGRect
@@ -37,21 +28,19 @@ final class DockSorter {
         var center: CGPoint {
             CGPoint(x: frame.midX, y: frame.midY)
         }
-
-        var identity: String {
-            "\(ownerName)\u{1f}\(title)"
-        }
     }
 
-    func groupMinimizedWindowsByApp() throws {
-        try requirePermission()
+    func groupMinimizedWindowsByApp(context: Context) async throws {
+        try requireAccessibilityPermission()
         guard !dockWindowGroupingEnabled else {
-            throw DockSortError.minimizeIntoApplicationEnabled
+            throw SortedError.minimizeIntoApplicationEnabled
         }
 
-        var items = try minimizedDockItems()
-        guard items.count > 1 else { throw DockSortError.noMinimizedWindows }
-        guard items.allSatisfy(isVisible(_:)) else { throw DockSortError.dockMustBeVisible }
+        var items = try minimizedDockItems(context: context)
+        guard items.count > 1 else { throw SortedError.noMinimizedWindows }
+        guard items.allSatisfy({ isVisible($0, on: context.screenFrames) }) else {
+            throw SortedError.dockMustBeVisible
+        }
 
         let originalPointerLocation = CGEvent(source: nil)?.location
         defer {
@@ -60,20 +49,18 @@ final class DockSorter {
             }
         }
 
-        let appOrder = items.reduce(into: [String]()) { order, item in
-            if !order.contains(item.ownerName) {
-                order.append(item.ownerName)
-            }
-        }
-        let desiredOwners = appOrder.flatMap { owner in
-            items.lazy.filter { $0.ownerName == owner }.map(\.ownerName)
-        }
         var attemptsRemaining = items.count * items.count * 3
         var consecutiveRejectedMoves = 0
 
         while attemptsRemaining > 0 {
-            items = try minimizedDockItems()
+            try Task.checkCancellation()
+
+            items = try minimizedDockItems(context: context)
             let currentOwners = items.map(\.ownerName)
+            // Recompute the target order every pass so windows minimized or
+            // restored mid-sort change the goal instead of leaving the two
+            // arrays with mismatched lengths.
+            let desiredOwners = groupedOrder(of: currentOwners)
             guard currentOwners != desiredOwners else { return }
             guard let targetIndex = currentOwners.indices.first(where: {
                 currentOwners[$0] != desiredOwners[$0]
@@ -83,27 +70,21 @@ final class DockSorter {
             }
 
             let before = currentOwners
-            let destination = insertionPoint(
-                before: items[targetIndex],
-                moving: items[sourceIndex],
-                in: items
-            )
+            let destination = insertionPoint(before: items[targetIndex], in: items)
 
-            try drag(from: items[sourceIndex].center, to: destination)
-            Thread.sleep(forTimeInterval: 0.32)
+            try await drag(from: items[sourceIndex].center, to: destination)
+            await sleep(seconds: 0.32)
 
-            var afterItems = try minimizedDockItems()
+            var afterItems = try minimizedDockItems(context: context)
             var after = afterItems.map(\.ownerName)
             if after == before, sourceIndex > targetIndex, sourceIndex < afterItems.count {
-                let adjacentTarget = afterItems[sourceIndex - 1]
                 let adjacentDestination = insertionPoint(
-                    before: adjacentTarget,
-                    moving: afterItems[sourceIndex],
+                    before: afterItems[sourceIndex - 1],
                     in: afterItems
                 )
-                try drag(from: afterItems[sourceIndex].center, to: adjacentDestination)
-                Thread.sleep(forTimeInterval: 0.32)
-                afterItems = try minimizedDockItems()
+                try await drag(from: afterItems[sourceIndex].center, to: adjacentDestination)
+                await sleep(seconds: 0.32)
+                afterItems = try minimizedDockItems(context: context)
                 after = afterItems.map(\.ownerName)
             }
 
@@ -119,10 +100,9 @@ final class DockSorter {
             attemptsRemaining -= 1
         }
 
-        let remainingItems = try minimizedDockItems()
-        let remaining = groupingMovesRemaining(in: remainingItems)
+        let remaining = groupingMovesRemaining(in: try minimizedDockItems(context: context))
         if remaining > 0 {
-            throw DockSortError.partiallySorted(remaining: remaining)
+            throw SortedError.partiallySorted(remaining: remaining)
         }
     }
 
@@ -130,32 +110,45 @@ final class DockSorter {
         UserDefaults(suiteName: "com.apple.dock")?.bool(forKey: "minimize-to-application") ?? false
     }
 
-    private func minimizedDockItems() throws -> [DockItem] {
-        guard let dock = NSWorkspace.shared.runningApplications.first(where: {
-            $0.bundleIdentifier == "com.apple.dock"
-        }) else {
-            throw DockSortError.dockNotFound
+    /// Groups each owner's entries together at the position of the owner's
+    /// first appearance, preserving order within groups.
+    private func groupedOrder(of owners: [String]) -> [String] {
+        var counts: [String: Int] = [:]
+        var order: [String] = []
+
+        for owner in owners {
+            if counts[owner] == nil {
+                order.append(owner)
+            }
+            counts[owner, default: 0] += 1
         }
 
-        let ownerByTitle = minimizedWindowOwners()
-        let dockElement = AXUIElementCreateApplication(dock.processIdentifier)
+        return order.flatMap { Array(repeating: $0, count: counts[$0] ?? 0) }
+    }
+
+    private func minimizedDockItems(context: Context) throws -> [DockItem] {
+        let ownersByTitle = minimizedWindowOwners(in: context.applications)
+        let dockElement = AXUIElementCreateApplication(context.dockPID)
         let elements = descendants(of: dockElement)
 
         let items = elements.compactMap { element -> DockItem? in
-            let subrole: String = value(of: kAXSubroleAttribute, from: element) ?? ""
+            let subrole: String = element.attribute(kAXSubroleAttribute) ?? ""
             guard subrole == kAXMinimizedWindowDockItemSubrole else { return nil }
 
-            let title: String = value(of: kAXTitleAttribute, from: element)
-                ?? value(of: kAXDescriptionAttribute, from: element)
+            let title: String = element.attribute(kAXTitleAttribute)
+                ?? element.attribute(kAXDescriptionAttribute)
                 ?? "Untitled"
-            guard let position: CGPoint = axValue(of: kAXPositionAttribute, from: element, as: .cgPoint),
-                  let size: CGSize = axValue(of: kAXSizeAttribute, from: element, as: .cgSize) else {
+            guard let position: CGPoint = element.attribute(kAXPositionAttribute, as: .cgPoint),
+                  let size: CGSize = element.attribute(kAXSizeAttribute, as: .cgSize) else {
                 return nil
             }
 
-            let owner = ownerByTitle[title]
-                ?? ownerByTitle.first(where: { title.contains($0.key) || $0.key.contains(title) })?.value
-                ?? "Unknown App"
+            // Thumbnails whose owning app can't be determined unambiguously
+            // are left in place rather than guessed at and mis-grouped.
+            guard let owner = owner(forDockItemTitled: title, in: ownersByTitle) else {
+                return nil
+            }
+
             return DockItem(
                 title: title,
                 frame: CGRect(origin: position, size: size),
@@ -166,23 +159,36 @@ final class DockSorter {
         return items.sorted(by: visualOrder)
     }
 
-    private func minimizedWindowOwners() -> [String: String] {
-        var owners: [String: String] = [:]
+    private func minimizedWindowOwners(in applications: [RunningApp]) -> [String: Set<String>] {
+        var owners: [String: Set<String>] = [:]
 
-        for application in NSWorkspace.shared.runningApplications where application.activationPolicy == .regular {
-            let appElement = AXUIElementCreateApplication(application.processIdentifier)
-            let windows: [AXUIElement] = value(of: kAXWindowsAttribute, from: appElement) ?? []
+        for application in applications {
+            let appElement = AXUIElementCreateApplication(application.pid)
+            let windows: [AXUIElement] = appElement.attribute(kAXWindowsAttribute) ?? []
 
             for window in windows {
-                let minimized: Bool = value(of: kAXMinimizedAttribute, from: window) ?? false
-                let title: String = value(of: kAXTitleAttribute, from: window) ?? ""
+                let minimized: Bool = window.attribute(kAXMinimizedAttribute) ?? false
+                let title: String = window.attribute(kAXTitleAttribute) ?? ""
                 if minimized && !title.isEmpty {
-                    owners[title] = application.localizedName ?? "Unknown App"
+                    owners[title, default: []].insert(application.name)
                 }
             }
         }
 
         return owners
+    }
+
+    private func owner(forDockItemTitled title: String, in ownersByTitle: [String: Set<String>]) -> String? {
+        if let exact = ownersByTitle[title] {
+            return exact.count == 1 ? exact.first : nil
+        }
+
+        let fuzzyCandidates = Set(
+            ownersByTitle
+                .filter { title.contains($0.key) || $0.key.contains(title) }
+                .flatMap(\.value)
+        )
+        return fuzzyCandidates.count == 1 ? fuzzyCandidates.first : nil
     }
 
     private func descendants(of root: AXUIElement) -> [AXUIElement] {
@@ -191,7 +197,7 @@ final class DockSorter {
 
         while !queue.isEmpty {
             let element = queue.removeFirst()
-            let children: [AXUIElement] = value(of: kAXChildrenAttribute, from: element) ?? []
+            let children: [AXUIElement] = element.attribute(kAXChildrenAttribute) ?? []
             result.append(contentsOf: children)
             queue.append(contentsOf: children)
         }
@@ -224,7 +230,7 @@ final class DockSorter {
         return separatedItems
     }
 
-    private func insertionPoint(before target: DockItem, moving: DockItem, in items: [DockItem]) -> CGPoint {
+    private func insertionPoint(before target: DockItem, in items: [DockItem]) -> CGPoint {
         if isHorizontalDock(items) {
             return CGPoint(
                 x: target.frame.minX + min(3, target.frame.width * 0.1),
@@ -239,34 +245,31 @@ final class DockSorter {
 
     private func isHorizontalDock(_ items: [DockItem]) -> Bool {
         guard let first = items.first else { return true }
-        let xSpread = items.map(\.frame.midX).max()! - items.map(\.frame.midX).min()!
-        let ySpread = items.map(\.frame.midY).max()! - items.map(\.frame.midY).min()!
+        let xs = items.map(\.frame.midX)
+        let ys = items.map(\.frame.midY)
+        let xSpread = (xs.max() ?? 0) - (xs.min() ?? 0)
+        let ySpread = (ys.max() ?? 0) - (ys.min() ?? 0)
         return xSpread >= ySpread || items.allSatisfy { abs($0.frame.midY - first.frame.midY) < first.frame.height }
     }
 
-    private func isVisible(_ item: DockItem) -> Bool {
-        NSScreen.screens.contains { screen in
-            let axScreenFrame = CGRect(
-                x: screen.frame.minX,
-                y: NSScreen.screens.map(\.frame.maxY).max()! - screen.frame.maxY,
-                width: screen.frame.width,
-                height: screen.frame.height
-            )
-            return axScreenFrame.intersects(item.frame)
-        }
+    private func isVisible(_ item: DockItem, on screenFrames: [CGRect]) -> Bool {
+        screenFrames.contains { $0.intersects(item.frame) }
     }
 
-    private func drag(from start: CGPoint, to end: CGPoint) throws {
+    private func drag(from start: CGPoint, to end: CGPoint) async throws {
         guard let move = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: start, mouseButton: .left),
               let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: start, mouseButton: .left),
               let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: end, mouseButton: .left) else {
-            throw DockSortError.partiallySorted(remaining: 1)
+            throw SortedError.partiallySorted(remaining: 1)
         }
 
+        // Once the button is down the sequence must run to the mouse-up —
+        // aborting mid-drag would leave a phantom pressed button — so the
+        // waits here ignore cancellation; the sort loop checks between moves.
         move.post(tap: .cghidEventTap)
-        Thread.sleep(forTimeInterval: 0.06)
+        await sleep(seconds: 0.06)
         down.post(tap: .cghidEventTap)
-        Thread.sleep(forTimeInterval: 0.16)
+        await sleep(seconds: 0.16)
 
         for step in 1...8 {
             let progress = CGFloat(step) / 8
@@ -274,49 +277,24 @@ final class DockSorter {
                 x: start.x + (end.x - start.x) * progress,
                 y: start.y + (end.y - start.y) * progress
             )
-            guard let drag = CGEvent(
+            guard let dragEvent = CGEvent(
                 mouseEventSource: nil,
                 mouseType: .leftMouseDragged,
                 mouseCursorPosition: point,
                 mouseButton: .left
             ) else {
-                throw DockSortError.partiallySorted(remaining: 1)
+                up.post(tap: .cghidEventTap)
+                throw SortedError.partiallySorted(remaining: 1)
             }
-            drag.post(tap: .cghidEventTap)
-            Thread.sleep(forTimeInterval: 0.02)
+            dragEvent.post(tap: .cghidEventTap)
+            await sleep(seconds: 0.02)
         }
 
-        Thread.sleep(forTimeInterval: 0.1)
+        await sleep(seconds: 0.1)
         up.post(tap: .cghidEventTap)
     }
 
-    private func requirePermission() throws {
-        let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
-        guard AXIsProcessTrustedWithOptions(options) else {
-            throw DockSortError.accessibilityPermissionRequired
-        }
-    }
-
-    private func value<T>(of attribute: String, from element: AXUIElement) -> T? {
-        var rawValue: CFTypeRef?
-        let result = AXUIElementCopyAttributeValue(element, attribute as CFString, &rawValue)
-        guard result == .success else { return nil }
-        return rawValue as? T
-    }
-
-    private func axValue<T>(
-        of attribute: String,
-        from element: AXUIElement,
-        as type: AXValueType
-    ) -> T? {
-        guard let rawValue: AXValue = value(of: attribute, from: element),
-              AXValueGetType(rawValue) == type else {
-            return nil
-        }
-
-        let pointer = UnsafeMutablePointer<T>.allocate(capacity: 1)
-        defer { pointer.deallocate() }
-        guard AXValueGetValue(rawValue, type, pointer) else { return nil }
-        return pointer.pointee
+    private func sleep(seconds: TimeInterval) async {
+        try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
     }
 }

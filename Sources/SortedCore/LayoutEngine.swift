@@ -35,16 +35,21 @@ public enum LayoutEngine {
     public static func cascade(count: Int, in frame: CGRect, offset: CGFloat = 32) -> [CGRect] {
         guard count > 0 else { return [] }
 
-        let availableOffset = min(offset, min(frame.width, frame.height) / CGFloat(max(count, 1)))
-        let width = max(320, frame.width - availableOffset * CGFloat(max(count - 1, 0)))
-        let height = max(220, frame.height - availableOffset * CGFloat(max(count - 1, 0)))
+        let steps = CGFloat(count - 1)
+        let preferredOffset = min(offset, min(frame.width, frame.height) / CGFloat(count))
+        let width = min(max(320, frame.width - preferredOffset * steps), frame.width)
+        let height = min(max(220, frame.height - preferredOffset * steps), frame.height)
+        // Clamp offsets so the minimum window size can't push the deepest
+        // windows in the stack past the frame's edges.
+        let xOffset = steps > 0 ? min(preferredOffset, (frame.width - width) / steps) : 0
+        let yOffset = steps > 0 ? min(preferredOffset, (frame.height - height) / steps) : 0
 
         return (0..<count).map { index in
             CGRect(
-                x: frame.minX + CGFloat(index) * availableOffset,
-                y: frame.minY + CGFloat(index) * availableOffset,
-                width: min(width, frame.width),
-                height: min(height, frame.height)
+                x: frame.minX + CGFloat(index) * xOffset,
+                y: frame.minY + CGFloat(index) * yOffset,
+                width: width,
+                height: height
             )
         }
     }

@@ -17,9 +17,11 @@ let package = Package(
             dependencies: ["SortedCore"],
             linkerSettings: [
                 .linkedFramework("AppKit"),
-                .linkedFramework("ApplicationServices")
+                .linkedFramework("ApplicationServices"),
+                .linkedFramework("Carbon"),
+                .linkedFramework("ServiceManagement")
             ]
         ),
-        .executableTarget(name: "SortedChecks", dependencies: ["SortedCore"])
+        .testTarget(name: "SortedCoreTests", dependencies: ["SortedCore"])
     ]
 )

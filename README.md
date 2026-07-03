@@ -16,7 +16,10 @@ gap with a one-click, live Dock sorter.
 - **Group Windows by App** places visible windows from each app together.
 - **Tile Frontmost App** fills the main display with the active app's windows.
 - **Cascade All Windows** creates an easy-to-scan stack.
-- Runs entirely as a menu-bar utility with no Dock icon.
+- Global keyboard shortcuts: **⌃⌥G** group by app, **⌃⌥T** tile frontmost,
+  **⌃⌥C** cascade, **⌃⌥M** sort the Dock (press again to cancel).
+- Runs entirely as a menu-bar utility with no Dock icon, with an optional
+  **Launch at Login** toggle.
 - Performs all work locally. No analytics, network requests, or cloud services.
 
 ## How Dock Sorting Works
@@ -32,6 +35,8 @@ Because the Dock only accepts reordering through drag input:
 - The Dock must be visible.
 - **Minimize windows into application icon** must be turned off.
 - A second click may occasionally be needed if the Dock rejects a move.
+- Sorting runs in the background; open the menu again and choose
+  **Cancel Dock Sorting** to stop it early.
 
 ## Requirements
 
@@ -88,27 +93,16 @@ windows that are already grouped.
 
 ## Verify
 
-Build the app:
+Build the app and run the tests:
 
 ```sh
-HOME="$PWD/.local-home" \
-CLANG_MODULE_CACHE_PATH="$PWD/.build/module-cache" \
-SDKROOT="/Library/Developer/CommandLineTools/SDKs/MacOSX15.4.sdk" \
 swift build
+swift test
 ```
 
-Run the layout checks:
-
-```sh
-HOME="$PWD/.local-home" \
-CLANG_MODULE_CACHE_PATH="$PWD/.build/module-cache" \
-SDKROOT="/Library/Developer/CommandLineTools/SDKs/MacOSX15.4.sdk" \
-swift run SortedChecks
-```
-
-The explicit SDK path works around a compiler/SDK patch mismatch on the machine
-where Sorted was created. With a matching Xcode installation, regular
-`swift build` and `swift run SortedChecks` commands should work.
+If your Command Line Tools SDK does not match the installed compiler, run the
+app with `SORTED_BUILD_WORKAROUNDS=1 sh run.sh`, which pins a known-good SDK
+and uses a repo-local home and module cache.
 
 ## Project Structure
 
@@ -116,7 +110,8 @@ where Sorted was created. With a matching Xcode installation, regular
 Sources/
   Sorted/        Menu-bar app, Accessibility integration, and Dock sorting
   SortedCore/    Testable window-layout geometry
-  SortedChecks/  Standalone layout verification
+Tests/
+  SortedCoreTests/  Layout geometry tests
 ```
 
 ## Known Limitations
